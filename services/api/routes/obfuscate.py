@@ -29,8 +29,12 @@ async def obfuscate(
             detail=f"File too large. Maximum is {settings.max_input_size_kb}KB",
         )
 
-    if not file.filename or not file.filename.endswith(".lua"):
-        raise HTTPException(status_code=400, detail="File must be a .lua file")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File must have a filename")
+
+    allowed_ext = (".lua", ".luau", ".txt")
+    if not file.filename.lower().endswith(allowed_ext):
+        raise HTTPException(status_code=400, detail="File must be .lua, .luau, or .txt")
 
     result = await run_obfuscation(
         input_bytes=content,

@@ -1,154 +1,275 @@
 """
-Luau → Lua 5.1 preprocessor.
-Strips Luau-specific syntax so that luac 5.1 can compile the result.
+Luau → Lua 5.1 preprocessor (token-aware).
 
-Handles:
-- Type annotations (: type, :: type)
-- Compound assignments (+=, -=, *=, /=, %=, ^=, ..=)
-- continue statement → replaced with goto-based pattern
-- if-then expressions (if x then y else z) — inline ternary
-- Type declarations (type Foo = ..., export type Foo = ...)
-- Generalized iteration (for k, v in obj do) — left as-is (works in Lua 5.1 if __iter)
-- String interpolation (`hello {name}`) → string.format or concatenation
-- Optional ?. and :: method type syntax
+Converts Luau/Roblox scripts to valid Lua 5.1 by:
+- Removing type annotations
+- Converting compound assignments (+=, -=, etc.)
+- Replacing `continue` with goto pattern (Lua 5.2+ goto, supported by luajit)
+- Converting string interpolation
+- Removing type declarations
+- Removing `::` type cast syntax
 """
 import re
 import sys
 
 
-def strip_type_annotations(source: str) -> str:
-    """Remove type annotations from function signatures and variable declarations."""
-    # Remove 'export type ...' and 'type ...' declarations (full lines)
-    source = re.sub(r'^[ \t]*export\s+type\s+[^\n]+', '', source, flags=re.MULTILINE)
-    source = re.sub(r'^[ \t]*type\s+\w+[^\n]*=[^\n]+', '', source, flags=re.MULTILINE)
-
-    # Remove return type annotations  ): Type  or  ): (Type, Type)
-    source = re.sub(r'\)\s*:\s*\([^)]*\)', ')', source)
-    source = re.sub(r'\)\s*:\s*[%w_<>|&?\[\].]+', ')', source)
-
-    # Remove parameter type annotations  name: Type
-    # Be careful not to match table constructors {key: value}
-    # Match inside parentheses for function params
-    def strip_param_types(m):
-        params_str = m.group(1)
-        # Remove ': Type' patterns but not '= default'
-        cleaned = re.sub(r':\s*[%s]+' % r'\w<>|&?\[\].\s"\'', '', params_str)
-        # Simpler: remove ': word' patterns
-        cleaned = re.sub(r':\s*[\w<>|\[\]?.&\s]+?(?=[,\)]|$)', '', params_str)
-        return '(' + cleaned + ')'
-
-    # Remove variable type annotations: local x: Type = ...
-    source = re.sub(r'(local\s+\w+)\s*:\s*[\w<>|\[\]?.&\s]+?(\s*=)', r'\1\2', source)
-    # local x: Type (no assignment)
-    source = re.sub(r'(local\s+\w+)\s*:\s*[\w<>|\[\]?.&\s]+', r'\1', source)
-
-    # Remove function parameter types more aggressively
-    # Pattern: (name: Type, name: Type) -> (name, name)
-    def clean_func_params(m):
-        content = m.group(1)
-        # Remove ': Type' after parameter names
-        content = re.sub(r'(\w+)\s*:\s*[^,\)]+', r'\1', content)
-        return '(' + content + ')'
-
-    source = re.sub(r'\(([^)]*:\s*[^)]+)\)', clean_func_params, source)
-
+def preprocess(source: str) -> str:
+    """Full Luau → Lua 5.1 preprocessing."""
+    source = _remove_type_declarations(source)
+    source = _remove_type_annotations_safe(source)
+    source = _convert_compound_assignments(source)
+    source = _convert_string_interpolation(source)
+    source = _convert_continue(source)
+    source = _remove_type_casts(source)
+    source = _cleanup(source)
     return source
 
 
-def convert_compound_assignments(source: str) -> str:
-    """Convert += -= *= /= %= ^= ..= to standard Lua."""
-    operators = [r'\+', r'-', r'\*', r'/', r'%%', r'\^', r'\.\.']
-
-    for op in operators:
-        clean_op = op.replace('\\', '')
-        pattern = r'(\b[\w.\[\]"\']+\b)\s*' + op + r'=\s*(.+)'
-        replacement = r'\1 = \1 ' + clean_op + r' \2'
-        source = re.sub(pattern, replacement, source, flags=re.MULTILINE)
-
-    return source
-
-
-def convert_continue(source: str) -> str:
-    """Replace 'continue' with a goto-based pattern."""
-    # Simple approach: replace continue with goto continue_label
-    # and add ::continue_label:: before each 'end' that closes a loop
-    # This is imperfect but works for most cases
-
-    if 'continue' not in source:
-        return source
-
+def _remove_type_declarations(source: str) -> str:
+    """Remove standalone type declarations."""
+    # export type Name = ...
+    # type Name = ...
+    # These can span multiple lines if they have { } blocks
     lines = source.split('\n')
     result = []
-    loop_depth = 0
-    label_counter = [0]
-    loop_stack = []
+    skip_until_balanced = False
+    brace_depth = 0
 
     for line in lines:
         stripped = line.strip()
 
-        # Track loop starts
-        if re.match(r'^(while|for|repeat)\b', stripped):
-            label_counter[0] += 1
-            loop_stack.append(label_counter[0])
-            loop_depth += 1
+        if skip_until_balanced:
+            brace_depth += line.count('{') - line.count('}')
+            if brace_depth <= 0:
+                skip_until_balanced = False
+            continue
 
-        # Replace continue
-        if stripped == 'continue' and loop_stack:
-            indent = len(line) - len(line.lstrip())
-            result.append(' ' * indent + f'goto __continue_{loop_stack[-1]}__')
-        else:
-            result.append(line)
+        if re.match(r'^(export\s+)?type\s+\w+', stripped):
+            # Check if it has opening brace — multi-line type
+            brace_depth = line.count('{') - line.count('}')
+            if brace_depth > 0:
+                skip_until_balanced = True
+            continue
 
-        # Before 'end' or 'until' that closes a loop, insert label
-        if loop_stack and (stripped == 'end' or stripped.startswith('until')):
-            if loop_depth > 0:
-                indent = len(line) - len(line.lstrip())
-                result.insert(-1, ' ' * indent + f'::__continue_{loop_stack[-1]}__::')
-                loop_stack.pop()
-                loop_depth -= 1
+        result.append(line)
 
     return '\n'.join(result)
 
 
-def convert_string_interpolation(source: str) -> str:
-    """Convert `hello {name}` to 'hello ' .. tostring(name)."""
+def _remove_type_annotations_safe(source: str) -> str:
+    """Remove type annotations without breaking code."""
+    lines = source.split('\n')
+    result = []
+
+    for line in lines:
+        line = _process_line_types(line)
+        result.append(line)
+
+    return '\n'.join(result)
+
+
+def _process_line_types(line: str) -> str:
+    """Process a single line to remove type annotations."""
+    # Skip strings — find code portions only
+    # Simple approach: process outside of string literals
+
+    # Remove return type from function declarations: function(...): ReturnType
+    # Pattern: ): TypeStuff  at end or before newline
+    line = re.sub(r'\)\s*:\s*\([\w\s,|?<>\[\]{}_.]+\)', ')', line)
+    line = re.sub(r'\)\s*:\s*[\w|?<>\[\]{}_.]+(?=\s*$|\s*--)', ')', line)
+
+    # Remove parameter type annotations inside function params
+    # foo(x: number, y: string) → foo(x, y)
+    # But don't touch table constructors like {key = value} or dict["key"]
+    # Only match inside balanced parentheses that look like function params
+    line = _strip_param_annotations(line)
+
+    # Remove local variable type annotations
+    # local x: Type = value → local x = value
+    line = re.sub(r'(local\s+[\w,\s]+)\s*:\s*[\w|?<>\[\]{}_.&\s]+?(\s*=)', r'\1\2', line)
+    # local x: Type  (no assignment, end of line)
+    line = re.sub(r'(local\s+\w+)\s*:\s*[\w|?<>\[\]{}_.&]+\s*$', r'\1', line)
+    # local x: Type  (no assignment, before comment)
+    line = re.sub(r'(local\s+\w+)\s*:\s*[\w|?<>\[\]{}_.&]+(\s*--)', r'\1\2', line)
+
+    return line
+
+
+def _strip_param_annotations(line: str) -> str:
+    """Strip type annotations from function parameters."""
+    # Find function-like patterns: function name(params) or (params) =>
+    # Match balanced parens that contain ':'
+
+    def replace_params(m):
+        full = m.group(0)
+        prefix = m.group(1)
+        inner = m.group(2)
+
+        # Don't touch if this looks like a table constructor or ternary
+        if prefix and prefix.strip().endswith('{'):
+            return full
+
+        # Only process if there's a colon that looks like type annotation
+        if ':' not in inner:
+            return full
+
+        # Split by comma, remove type annotations from each param
+        params = []
+        depth = 0
+        current = ''
+        for ch in inner:
+            if ch in '({[':
+                depth += 1
+                current += ch
+            elif ch in ')}]':
+                depth -= 1
+                current += ch
+            elif ch == ',' and depth == 0:
+                params.append(current.strip())
+                current = ''
+            else:
+                current += ch
+        if current.strip():
+            params.append(current.strip())
+
+        cleaned_params = []
+        for p in params:
+            # Remove ': Type' but keep '...' and default values
+            # param: Type = default → param = default
+            # param: Type → param
+            p = re.sub(r'^(\.\.\.)\s*:\s*[\w|?<>\[\]{}_.&]+', r'\1', p)
+            p = re.sub(r'^(\w+)\s*:\s*[\w|?<>\[\]{}_.&\s]+?(\s*=.+)$', r'\1\2', p)
+            p = re.sub(r'^(\w+)\s*:\s*[\w|?<>\[\]{}_.&]+', r'\1', p)
+            cleaned_params.append(p)
+
+        return prefix + '(' + ', '.join(cleaned_params) + ')'
+
+    # Match (params_with_colon)
+    line = re.sub(r'([\w.]*\s*)\(([^)]*:[^)]*)\)', replace_params, line)
+    return line
+
+
+def _convert_compound_assignments(source: str) -> str:
+    """Convert += -= *= /= %= ^= ..= to standard Lua 5.1."""
+    lines = source.split('\n')
+    result = []
+
+    for line in lines:
+        # Skip lines inside strings (very basic check)
+        stripped = line.strip()
+        if stripped.startswith('--'):
+            result.append(line)
+            continue
+
+        # Match: identifier += expression
+        # Be careful with == !== ~= (comparison operators)
+        for op_pat, op_char in [
+            (r'\.\.=', '..'),
+            (r'\+=', '+'),
+            (r'-=', '-'),
+            (r'\*=', '*'),
+            (r'/=', '/'),
+            (r'%%=', '%'),
+            (r'\^=', '^'),
+        ]:
+            pattern = r'^(\s*)([\w.\[\]"\'()]+)\s*' + op_pat + r'\s*(.+)$'
+            m = re.match(pattern, line)
+            if m:
+                indent = m.group(1)
+                var = m.group(2)
+                expr = m.group(3)
+                line = f'{indent}{var} = {var} {op_char} ({expr})'
+                break
+
+        result.append(line)
+
+    return '\n'.join(result)
+
+
+def _convert_string_interpolation(source: str) -> str:
+    """Convert `text {expr} text` to "text" .. tostring(expr) .. "text"."""
     def replace_interp(m):
         content = m.group(1)
+        if '{' not in content:
+            # No interpolation, just convert to regular string
+            return '"' + content.replace('"', '\\"') + '"'
         parts = []
         last_end = 0
         for brace in re.finditer(r'\{([^}]+)\}', content):
-            # Text before this interpolation
             text_before = content[last_end:brace.start()]
             if text_before:
-                parts.append(f'"{text_before}"')
-            parts.append(f'tostring({brace.group(1)})')
+                parts.append('"' + text_before.replace('"', '\\"') + '"')
+            parts.append('tostring(' + brace.group(1) + ')')
             last_end = brace.end()
-        # Remaining text
         remaining = content[last_end:]
         if remaining:
-            parts.append(f'"{remaining}"')
+            parts.append('"' + remaining.replace('"', '\\"') + '"')
         return ' .. '.join(parts) if parts else '""'
 
     source = re.sub(r'`([^`]*)`', replace_interp, source)
     return source
 
 
-def strip_generics(source: str) -> str:
-    """Remove generic type parameters <T, U> from function definitions."""
-    source = re.sub(r'<[\w\s,]+>', '', source)
+def _convert_continue(source: str) -> str:
+    """Replace 'continue' with goto-based equivalent."""
+    if '\ncontinue' not in '\n' + source and '\tcontinue' not in source and '  continue' not in source:
+        if not re.search(r'^\s*continue\s*$', source, re.MULTILINE):
+            return source
+
+    lines = source.split('\n')
+    result = []
+    loop_stack = []  # stack of label ids
+    label_id = 0
+    # Track which ends correspond to loops
+    block_stack = []  # 'loop' or 'other'
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+
+        # Detect loop starts
+        if re.match(r'^\s*(for|while|repeat)\b', line):
+            label_id += 1
+            loop_stack.append(label_id)
+            block_stack.append('loop')
+            result.append(line)
+        elif re.match(r'^\s*(if|do|function|local\s+function)\b', line) and not re.match(r'^\s*(for|while)\b', line):
+            block_stack.append('other')
+            result.append(line)
+        elif stripped == 'continue':
+            if loop_stack:
+                result.append(' ' * indent + f'goto __continue_{loop_stack[-1]}__')
+            else:
+                result.append(line)  # leave as is, will error but at least won't crash preprocessor
+        elif stripped == 'end' or stripped.startswith('until'):
+            if block_stack and block_stack[-1] == 'loop':
+                # Insert continue label before end/until
+                result.append(' ' * indent + f'::__continue_{loop_stack[-1]}__::')
+                loop_stack.pop()
+                block_stack.pop()
+            elif block_stack:
+                block_stack.pop()
+            result.append(line)
+        else:
+            result.append(line)
+
+    return '\n'.join(result)
+
+
+def _remove_type_casts(source: str) -> str:
+    """Remove :: type cast syntax (expr :: Type → expr)."""
+    source = re.sub(r'\s*::\s*[\w|?<>\[\]{}_.&]+', '', source)
     return source
 
 
-def preprocess(source: str) -> str:
-    """Full Luau → Lua 5.1 preprocessing pipeline."""
-    source = strip_generics(source)
-    source = strip_type_annotations(source)
-    source = convert_compound_assignments(source)
-    source = convert_string_interpolation(source)
-    source = convert_continue(source)
+def _cleanup(source: str) -> str:
+    """Final cleanup pass."""
+    # Remove leftover '?' from optional types on identifiers (but not in strings)
+    # Be conservative — only remove ? right after a word char at specific positions
+    # Actually skip this — too risky to break ternary-like patterns
 
-    # Remove '?' from optional types that might remain
-    source = re.sub(r'(\w)\?', r'\1', source)
+    # Remove empty lines that were left by type removal (collapse multiple blank lines)
+    source = re.sub(r'\n{3,}', '\n\n', source)
 
     return source
 

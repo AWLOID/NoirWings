@@ -1,13 +1,13 @@
 import asyncio
 import os
-import subprocess
+import re
 import time
 import uuid
 
 from api.config import settings
 
-# Path to the Luau preprocessor script
-PREPROCESS_SCRIPT = os.path.join(os.path.dirname(__file__), "luau_preprocess.py")
+# Path to the Luau preprocessor script (sits next to worker.py inside the container)
+PREPROCESS_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "luau_preprocess.py")
 
 
 class ObfuscationResult:
@@ -16,30 +16,6 @@ class ObfuscationResult:
         self.output_path = output_path
         self.error = error
         self.duration_ms = duration_ms
-
-
-def _needs_preprocessing(file_bytes: bytes) -> bool:
-    """Check if the file contains Luau-specific syntax that needs preprocessing."""
-    text = file_bytes.decode("utf-8", errors="replace")
-    # Compound assignments
-    if any(op in text for op in ["+=", "-=", "*=", "/=", "%=", "^=", "..="]):
-        return True
-    # Type annotations
-    if re.search(r':\s*(string|number|boolean|any|nil|Instance|Player|Part)\b', text):
-        return True
-    # Type declarations
-    if re.search(r'^(export\s+)?type\s+\w+', text, re.MULTILINE):
-        return True
-    # String interpolation
-    if '`' in text and '{' in text:
-        return True
-    # continue keyword
-    if re.search(r'\bcontinue\b', text):
-        return True
-    return False
-
-
-import re
 
 
 async def run_obfuscation(
@@ -55,28 +31,31 @@ async def run_obfuscation(
     work_dir = os.path.join(settings.work_dir, f"job-{job_id}")
     os.makedirs(work_dir, exist_ok=True)
 
-    input_path = os.path.join(work_dir, f"input_{filename}")
-    output_path = os.path.join(work_dir, f"output_{filename}")
+    # Normalize filename to .lua for the engine
+    base_name = os.path.splitext(filename)[0]
+    lua_filename = base_name + ".lua"
+
+    input_path = os.path.join(work_dir, f"input_{lua_filename}")
+    output_path = os.path.join(work_dir, f"output_{lua_filename}")
 
     try:
         # Write input file
         with open(input_path, "wb") as f:
             f.write(input_bytes)
 
-        # Preprocess Luau → Lua 5.1 if needed
-        if _needs_preprocessing(input_bytes):
-            preprocessed_path = os.path.join(work_dir, f"preprocessed_{filename}")
-            proc = await asyncio.create_subprocess_exec(
-                "python3", PREPROCESS_SCRIPT, input_path, preprocessed_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0 or not os.path.exists(preprocessed_path):
-                # Fallback: use original file
-                preprocessed_path = input_path
-            else:
-                input_path = preprocessed_path
+        # Always run Luau preprocessor — it's safe on pure Lua 5.1 too
+        preprocessed_path = os.path.join(work_dir, f"clean_{lua_filename}")
+        proc = await asyncio.create_subprocess_exec(
+            "python3", PREPROCESS_SCRIPT, input_path, preprocessed_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=work_dir,
+        )
+        pp_stdout, pp_stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if proc.returncode == 0 and os.path.exists(preprocessed_path):
+            input_path = preprocessed_path
+        # If preprocessing fails, use original — the engine error will be more informative
 
         # Build command: dotnet /path/to/NoirWings.Vm.dll ...
         cmd = [

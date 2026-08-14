@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: noirwings
+      POSTGRES_PASSWORD: noirwings
+      POSTGRES_DB: noirwings
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noirwings"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      - API_KEY=${API_KEY:-change-me-to-a-secure-random-key}
+      - DATABASE_URL=postgresql+asyncpg://noirwings:noirwings@postgres:5432/noirwings
+      - NOIRWINGS_DLL=/opt/noirwings/NoirWings.Vm.dll
+      - WORK_DIR=/tmp/noirwings
+    volumes:
+      - ./api:/app
+      - noirwings-runtime:/opt/noirwings
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - API_URL=http://api:8000
+      - API_KEY=${API_KEY:-change-me-to-a-secure-random-key}
+      - DATABASE_URL=postgresql+asyncpg://noirwings:noirwings@postgres:5432/noirwings
+      - ADMIN_IDS=${ADMIN_IDS:-[]}
+    volumes:
+      - ./bot:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  noirwings-runtime:
+    # Mount your published NoirWings.Vm here:
+    # docker volume create noirwings-runtime
+    # docker cp ./engine/NoirWings.Vm/bin/Release/net10.0/. noirwings-runtime-container:/opt/noirwings/

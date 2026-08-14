@@ -1,0 +1,40 @@
+# Build outputs
+engine/NoirWings.Vm/bin/
+engine/NoirWings.Vm/obj/
+third_party/ironbrew-2-master/IronBrew2/bin/
+third_party/ironbrew-2-master/IronBrew2/obj/
+third_party/ironbrew-2-master/IronBrew2 CLI/bin/
+third_party/ironbrew-2-master/IronBrew2 CLI/obj/
+
+# Python
+services/bot/__pycache__/
+services/api/__pycache__/
+services/**/__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Environment files with secrets
+services/.env
+services/bot/.env
+services/api/.env
+
+# Docker volumes
+pgdata/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# Temp
+*.tmp
+*.log

@@ -6,10 +6,16 @@ from fastapi import APIRouter, Depends
 from api.auth import verify_api_key
 from api.config import settings
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter()
 
 
 @router.get("/health")
+async def health_root():
+    """Root health check for Railway."""
+    return {"status": "ok"}
+
+
+@router.get("/api/v1/health")
 async def health():
     """Check if the API and NoirWings runtime are available."""
     dll_exists = os.path.exists(settings.noirwings_dll)
@@ -22,7 +28,7 @@ async def health():
     }
 
 
-@router.get("/stats", dependencies=[Depends(verify_api_key)])
+@router.get("/api/v1/stats", dependencies=[Depends(verify_api_key)])
 async def stats():
     """Return basic API statistics."""
     work_dir = settings.work_dir

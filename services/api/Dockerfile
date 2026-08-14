@@ -1,10 +1,4 @@
-FROM mcr.microsoft.com/dotnet/runtime:10.0-preview AS dotnet-base
-
 FROM python:3.12-slim
-
-# Copy .NET runtime from the dotnet base image
-COPY --from=dotnet-base /usr/share/dotnet /usr/share/dotnet
-RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet
 
 WORKDIR /srv
 
@@ -14,8 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all source into /srv/api/ — preserves package structure
 COPY . ./api/
 
-# Copy the published NoirWings.Vm engine
+# Copy the published NoirWings.Vm engine (self-contained)
 COPY noirwings-runtime/ /opt/noirwings/
+RUN chmod +x /opt/noirwings/NoirWings.Vm || true
 
 # Create work directory for obfuscation jobs
 RUN mkdir -p /tmp/noirwings

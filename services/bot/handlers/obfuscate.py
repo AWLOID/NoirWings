@@ -22,17 +22,23 @@ router = Router()
 # Daily limit for regular users
 DEFAULT_DAILY_LIMIT = 3
 
+# Accepted file extensions
+ALLOWED_EXTENSIONS = (".lua", ".luau", ".txt")
+
 # Temporary storage for pending files (in production, use Redis or FSM)
 _pending_files: dict[int, tuple[str, bytes]] = {}
 
 
 @router.message(F.document)
 async def handle_document(message: Message):
-    """Handle uploaded .lua file."""
+    """Handle uploaded .lua/.luau/.txt file."""
     doc = message.document
 
-    if not doc.file_name or not doc.file_name.endswith(".lua"):
-        await message.answer("⚠️ Пожалуйста, отправьте файл с расширением <code>.lua</code>", parse_mode="HTML")
+    if not doc.file_name or not doc.file_name.lower().endswith(ALLOWED_EXTENSIONS):
+        await message.answer(
+            "⚠️ Пожалуйста, отправьте файл с расширением <code>.lua</code>, <code>.luau</code> или <code>.txt</code>",
+            parse_mode="HTML",
+        )
         return
 
     is_admin = message.from_user.id in settings.admin_ids

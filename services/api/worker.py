@@ -21,7 +21,7 @@ async def run_obfuscation(
     seed: int | None = None,
     inner_string_encryption: bool = False,
 ) -> ObfuscationResult:
-    """Run NoirWings.Vm on the input Lua file and return the result."""
+    """Run NoirWings.Vm.dll on the input Lua file and return the result."""
 
     job_id = uuid.uuid4().hex[:12]
     work_dir = os.path.join(settings.work_dir, f"job-{job_id}")
@@ -35,19 +35,15 @@ async def run_obfuscation(
         with open(input_path, "wb") as f:
             f.write(input_bytes)
 
-        # Build command — self-contained or dotnet + dll
-        exe_path = settings.noirwings_dll
-        if settings.dotnet_path:
-            cmd = [settings.dotnet_path, exe_path]
-        else:
-            cmd = [exe_path]
-
-        cmd.extend([
+        # Build command: dotnet /path/to/NoirWings.Vm.dll ...
+        cmd = [
+            settings.dotnet_path,
+            settings.noirwings_dll,
             "--input", input_path,
             "--output", output_path,
             "--profile", profile,
             "--work-root", work_dir,
-        ])
+        ]
 
         if seed is not None:
             cmd.extend(["--seed", str(seed)])

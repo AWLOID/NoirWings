@@ -5,8 +5,8 @@ from pydantic import field_validator
 class Settings(BaseSettings):
     api_key: str = ""
     database_url: str = "postgresql+asyncpg://noirwings:noirwings@postgres:5432/noirwings"
-    noirwings_dll: str = "/opt/noirwings/NoirWings.Vm"
-    dotnet_path: str = ""
+    noirwings_dll: str = "/opt/noirwings/NoirWings.Vm.dll"
+    dotnet_path: str = "dotnet"
     work_dir: str = "/tmp/noirwings"
     max_input_size_kb: int = 512
     obfuscation_timeout: int = 120

@@ -10,10 +10,10 @@ COPY . ./api/
 
 # Copy the published NoirWings.Vm engine (self-contained)
 COPY noirwings-runtime/ /opt/noirwings/
-RUN chmod +x /opt/noirwings/NoirWings.Vm
+RUN chmod -R 755 /opt/noirwings/
 
 # Create work directory for obfuscation jobs
-RUN mkdir -p /tmp/noirwings
+RUN mkdir -p /tmp/noirwings && chmod 777 /tmp/noirwings
 
 EXPOSE 8000
 

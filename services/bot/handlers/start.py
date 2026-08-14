@@ -1,9 +1,9 @@
 from aiogram import Router
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.crud import get_or_create_user, is_whitelisted, get_subscription
+from bot.config import settings
+from bot.db.crud import get_or_create_user, get_subscription, count_today_jobs
 from bot.db.session import async_session
 
 router = Router()
@@ -18,27 +18,20 @@ async def cmd_start(message: Message):
             username=message.from_user.username,
             first_name=message.from_user.first_name,
         )
-        whitelisted = await is_whitelisted(session, message.from_user.id)
 
-    if not whitelisted:
-        await message.answer(
-            "🚫 <b>Доступ ограничен</b>\n\n"
-            "У вас нет доступа к NoirWings Bot.\n"
-            "Обратитесь к администратору для получения доступа.",
-            parse_mode="HTML",
-        )
-        return
+    is_admin = message.from_user.id in settings.admin_ids
+    role = "👑 Администратор" if is_admin else "👤 Пользователь"
 
     await message.answer(
-        "🦅 <b>NoirWings VM Obfuscator</b>\n\n"
-        "Добро пожаловать! Отправьте мне <code>.lua</code> файл для обфускации.\n\n"
+        f"🦅 <b>NoirWings VM Obfuscator</b>\n\n"
+        f"Добро пожаловать! {role}\n"
+        f"Отправьте мне <code>.lua</code> файл для обфускации.\n\n"
         "📋 <b>Команды:</b>\n"
-        "/obfuscate — инструкция по обфускации\n"
+        "/help — справка\n"
         "/profile — выбор профиля защиты\n"
         "/options — настройка опций\n"
         "/history — история обфускаций\n"
-        "/status — подписка и лимиты\n"
-        "/help — справка",
+        "/status — подписка и лимиты",
         parse_mode="HTML",
     )
 
@@ -55,24 +48,37 @@ async def cmd_help(message: Message):
         "⚡ <b>Balanced</b> — быстрая обфускация, базовая защита\n"
         "🛡 <b>Hardened</b> — усиленная защита, opaque predicates + env cage\n"
         "🔒 <b>Maximum</b> — максимальная защита, все фичи включены\n\n"
-        "<b>Опции (Luraph-tier):</b>\n"
-        "• Opaque Predicates — алгебраические предикаты для dead code\n"
-        "• Environment Cage — изоляция от хуков\n"
-        "• Anti-Hook — проверка целостности stdlib\n"
-        "• Dynamic Dispatch — переключение таблиц диспетчеризации\n"
-        "• Watermark Integrity — защита от удаления вотермарки\n"
-        "• String Encryption — шифрование строковых констант",
+        "<b>Лимиты:</b>\n"
+        "• Бесплатно: 3 обфускации в день\n"
+        "• Pro: 50 в день\n"
+        "• Unlimited: без лимитов",
         parse_mode="HTML",
     )
 
 
 @router.message(Command("status"))
 async def cmd_status(message: Message):
+    is_admin = message.from_user.id in settings.admin_ids
+
     async with async_session() as session:
         sub = await get_subscription(session, message.from_user.id)
+        today_count = await count_today_jobs(session, message.from_user.id)
+
+    if is_admin:
+        await message.answer(
+            "👑 <b>Администратор</b>\n\n"
+            f"📊 Обфускаций сегодня: {today_count}\n"
+            "📈 Лимит: ∞",
+            parse_mode="HTML",
+        )
+        return
 
     if sub is None:
-        await message.answer("❌ У вас нет активной подписки.")
+        await message.answer(
+            "🆓 <b>Подписка:</b> FREE\n"
+            f"📊 Обфускаций сегодня: {today_count}/3",
+            parse_mode="HTML",
+        )
         return
 
     plan_emoji = {"free": "🆓", "pro": "⭐", "unlimited": "💎"}
@@ -81,6 +87,6 @@ async def cmd_status(message: Message):
     await message.answer(
         f"{plan_emoji.get(sub.plan.value, '')} <b>Подписка:</b> {sub.plan.value.upper()}\n"
         f"📅 <b>Действует до:</b> {expires}\n"
-        f"📊 <b>Лимит:</b> {sub.daily_limit} обф./день",
+        f"📊 <b>Сегодня:</b> {today_count}/{sub.daily_limit}",
         parse_mode="HTML",
     )

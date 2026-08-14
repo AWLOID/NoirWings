@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.config import settings
 from bot.db.crud import (
     count_today_jobs,
     create_job,
@@ -11,13 +12,15 @@ from bot.db.crud import (
     fail_job,
     get_or_create_user,
     get_subscription,
-    is_whitelisted,
 )
 from bot.db.session import async_session
 from bot.keyboards.profile import profile_keyboard
 from bot.services.api_client import NoirWingsAPIClient
 
 router = Router()
+
+# Daily limit for regular users
+DEFAULT_DAILY_LIMIT = 3
 
 # Temporary storage for pending files (in production, use Redis or FSM)
 _pending_files: dict[int, tuple[str, bytes]] = {}
@@ -32,18 +35,18 @@ async def handle_document(message: Message):
         await message.answer("⚠️ Пожалуйста, отправьте файл с расширением <code>.lua</code>", parse_mode="HTML")
         return
 
-    async with async_session() as session:
-        if not await is_whitelisted(session, message.from_user.id):
-            await message.answer("🚫 Доступ ограничен.")
-            return
+    is_admin = message.from_user.id in settings.admin_ids
 
-        sub = await get_subscription(session, message.from_user.id)
-        if sub:
+    # Check daily limit (skip for admins)
+    if not is_admin:
+        async with async_session() as session:
             today_count = await count_today_jobs(session, message.from_user.id)
-            if today_count >= sub.daily_limit:
+            sub = await get_subscription(session, message.from_user.id)
+            limit = sub.daily_limit if sub else DEFAULT_DAILY_LIMIT
+            if today_count >= limit:
                 await message.answer(
-                    f"⚠️ Достигнут дневной лимит ({sub.daily_limit} обфускаций).\n"
-                    "Повысьте подписку для увеличения лимита.",
+                    f"⚠️ Достигнут дневной лимит ({limit} обфускаций).\n"
+                    "Попробуйте завтра.",
                 )
                 return
 

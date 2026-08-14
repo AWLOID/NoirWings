@@ -28,8 +28,8 @@ async def get_or_create_user(
         user = User(telegram_id=telegram_id, username=username, first_name=first_name)
         session.add(user)
         await session.flush()
-        # Create free subscription by default
-        sub = Subscription(user_id=user.id, plan=Plan.free, daily_limit=5)
+        # Create free subscription by default (3 obfuscations per day)
+        sub = Subscription(user_id=user.id, plan=Plan.free, daily_limit=3)
         session.add(sub)
         await session.commit()
         await session.refresh(user)
@@ -116,7 +116,7 @@ async def grant_subscription(
     result = await session.execute(stmt)
     sub = result.scalar_one_or_none()
 
-    limits = {Plan.free: 5, Plan.pro: 50, Plan.unlimited: 999999}
+    limits = {Plan.free: 3, Plan.pro: 50, Plan.unlimited: 999999}
 
     if sub is None:
         sub = Subscription(

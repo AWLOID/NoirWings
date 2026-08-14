@@ -37,6 +37,7 @@ async def main():
     # Register middlewares
     dp.message.middleware(ThrottleMiddleware(rate_limit=1.5))
     dp.message.middleware(AuthMiddleware())
+    dp.callback_query.middleware(AuthMiddleware())
 
     # Register routers
     dp.include_router(start_router)

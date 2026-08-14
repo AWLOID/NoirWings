@@ -3,7 +3,7 @@ from pydantic import field_validator
 
 
 class Settings(BaseSettings):
-    api_key: str
+    api_key: str = ""
     database_url: str = "postgresql+asyncpg://noirwings:noirwings@postgres:5432/noirwings"
     noirwings_dll: str = "/opt/noirwings/NoirWings.Vm.dll"
     dotnet_path: str = "dotnet"
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
             v = v.replace("postgres://", "postgresql+asyncpg://", 1)
         return v
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

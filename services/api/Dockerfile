@@ -1,11 +1,12 @@
 FROM python:3.12-slim
 
-# Install .NET 10 runtime
-RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates \
+# Install .NET 10 runtime + Lua 5.1 compiler (required by NoirWings VM)
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates lua5.1 \
     && wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --channel 10.0 --runtime dotnet --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && ln -sf /usr/bin/luac5.1 /usr/bin/luac \
     && rm /tmp/dotnet-install.sh \
     && apt-get remove -y wget && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
